@@ -20,8 +20,8 @@ crash cannot happen.
    `...\TheChroniclesOfMyrtana\System\Autorun\`
    (Union auto-loads every DLL in `System\Autorun`. No ini edit needed.)
 2. Add this block to `System\Gothic.ini` (optional — defaults are used if absent).
-   Note the section is `[AUTOSAVE_PLUGIN]` — deliberately **separate** from
-   Archolos' own built-in `[AUTOSAVE]` section so the two never collide:
+   The section is `[AUTOSAVE_PLUGIN]`, kept distinct from any leftover `[AUTOSAVE]`
+   section (e.g. from the old Autosave Ninja patch) so they never collide:
 
    ```ini
    [AUTOSAVE_PLUGIN]
@@ -54,19 +54,6 @@ crash cannot happen.
 | `GraceSeconds` | 30 | Wait this long after a load before the first autosave. |
 | `Counter` | (auto) | Incrementing save-name number. Written by the plugin; survives restarts. |
 | `NextSlot` | (auto) | Which slot the next autosave uses. Written by the plugin. |
-
-## Archolos already has a built-in autosave
-
-Archolos ships its own autosave, configured in the `[AUTOSAVE]` section of
-`Gothic.ini` (`minutes=5`, rotating slots **13–15**). That tells us the valid
-slot range goes up to **15**, so this plugin defaults to `Slot=15` (in range,
-proven safe) rather than a higher number that could write out of bounds and
-crash.
-
-Because the built-in autosave rotates 13–15, slot 15 is occasionally shared. If
-you want this plugin to be the *only* autosaver, either set its `Slot` to a free
-in-range slot, or reduce Archolos' built-in `[AUTOSAVE] slotMax` so the two
-don't overlap. Running both is harmless (just redundant), not a crash risk.
 
 ## Status: complete
 
