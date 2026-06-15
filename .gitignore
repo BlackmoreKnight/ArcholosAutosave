@@ -1,0 +1,30 @@
+# Visual Studio / MSBuild build artifacts
+[Bb]in/[Dd]ebug/
+[Oo]bj/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.idb
+*.ipdb
+*.iobj
+*.tlog
+*.log
+.vs/
+*.user
+
+# Build output folders from the UnionProject SDK configs
+G1 Release/
+G1 Debug/
+G1A Release/
+G1A Debug/
+G2 Release/
+G2 Debug/
+G2A Release/
+G2A Debug/
+Debug/
+Release/
+
+# Local diagnostic log produced at runtime
+ArcholosAutosave.log
