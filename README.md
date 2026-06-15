@@ -6,7 +6,7 @@ Engine-level autosave for **The Chronicles of Myrtana: Archolos** (Gothic 2 NotR
 
 The script patches (`Autosave.vdf` + `Toolkit.vdf`) inject a **second** copy of
 Ikarus/LeGo plus **vanilla** save hooks into Archolos' already-modified engine.
-Duplicate symbols + the wrong save routine = the **access violation** you hit.
+Duplicate symbols + the wrong save routine cause an **access-violation crash**.
 
 This plugin runs as native C++ inside the engine. It triggers a save by calling
 the engine's own `oCGame::WriteSavegame()` — the *exact* code path the in-game
