@@ -46,9 +46,6 @@ static int  g_graceMs      = 30 * 1000;      // delay after a load before first 
 // ----------------------------- runtime state -------------------------------
 static unsigned int g_lastSaveTime = 0;      // ms timestamp of last (auto or manual) save
 static bool         g_saving       = false;  // a save is in progress
-static unsigned int g_saveMsgUntil = 0;      // draw the autosave notice until this time
-static bool         g_pendingSave  = false;  // save is armed, waiting for the notice to show
-static unsigned int g_saveAtTime   = 0;      // perform the armed save at/after this time
 static int          g_nextSlot     = 12;     // next slot in the rotation (persisted)
 static int          g_counter      = 0;      // incrementing save-name number (persisted)
 
@@ -350,8 +347,14 @@ static void DoAutosave() {
 
   oCSavegameManager* mgr = ogame->savegameManager;
 
+  // CGameManager::Write_Savegame is the G2 full save: it serializes the LIVE
+  // world AND script/parser state (quest stages, log, Daedalus globals).
+  // oCGame::WriteSavegame (the G1A path) only wrote the world and left
+  // SAVEDAT/SCRPTSAVE copied from the stale current\ snapshot, so quest
+  // progress made since the last load/level-change was lost.
   g_saving = true;
-  ogame->WriteSavegame( slot, 0 );   // proven: writes the complete save
+  if ( gameMan )
+    gameMan->Write_Savegame( slot );
   g_saving = false;
 
   // Fix the on-disk SAVEINFO (name/date) and write a fresh thumbnail from the
@@ -421,42 +424,23 @@ static void OnFrame( oCGame* game ) {
     return;
 
   unsigned int now = Timer::GetTime();
+  if ( now - g_lastSaveTime < (unsigned int)g_intervalMs )
+    return;
 
-  // Decide what to do this frame. When a save is due we ARM it (show the notice
-  // this frame) and perform the blocking save NEXT frame, so the notice is
-  // already presented and stays visible through the brief save freeze.
-  bool doSaveNow = false;
-  if ( g_pendingSave ) {
-    // Wait ~250ms after arming so the notice renders over several real frames
-    // before the blocking save (AdvanceClock can fire multiple times per frame).
-    if ( now >= g_saveAtTime ) {
-      g_pendingSave = false;
-      doSaveNow = true;
+  if ( !IsSafeToSave() ) {
+    static unsigned int lastSkip = 0;
+    if ( now - lastSkip >= 30000 ) {
+      lastSkip = now;
+      char buf[96];
+      std::snprintf( buf, sizeof( buf ), "[Autosave] due but skipped: %s", g_skipReason );
+      PluginLog( buf );
     }
-  } else if ( now - g_lastSaveTime >= (unsigned int)g_intervalMs ) {
-    if ( IsSafeToSave() ) {
-      g_saveMsgUntil = now + 3000;
-      g_saveAtTime   = now + 250;
-      g_pendingSave  = true;
-    } else {
-      static unsigned int lastSkip = 0;
-      if ( now - lastSkip >= 30000 ) {
-        lastSkip = now;
-        char buf[96];
-        std::snprintf( buf, sizeof( buf ), "[Autosave] due but skipped: %s", g_skipReason );
-        PluginLog( buf );
-      }
-    }
+    return;
   }
 
-  // Draw the notice every frame while active: the armed frame (before the save),
-  // through the save freeze, and briefly after. (PrintTimed* isn't rendered
-  // in-game on this build, so we redraw with Print each frame.)
-  if ( screen && now < g_saveMsgUntil )
-    screen->Print( 3100, 400, zSTRING( "Autosaving..." ) );
-
-  if ( doSaveNow )
-    DoAutosave();
+  // gameMan->Write_Savegame shows the game's own save progress bar, so no custom
+  // on-screen notice (or pre-save frame deferral) is needed anymore.
+  DoAutosave();
 }
 
 void __fastcall Hooked_AdvanceClock( void* self, void* edx, float dt ) {

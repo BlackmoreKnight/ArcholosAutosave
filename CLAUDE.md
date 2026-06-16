@@ -38,9 +38,14 @@ The plugin builds against the **Union SDK / Gothic API** (NOT vendored here):
 - **Use `UnionCore::Hook_Detours`** — `Hook_Auto` silently fails to patch on this build (verified
   by reading the target bytes: with Detours an `E9` jmp appears, with Auto it doesn't).
 - **"In game" = global `player != null`**; `oCGame::m_bWorldEntered` reads 0 mid-play here.
-- **Save = `oCGame::WriteSavegame(slot, 0)`** (writes the full world). `SetAndWriteSavegame`
-  writes metadata only → empty, unloadable saves; never use it for the world.
-- **WriteSavegame copies `SAVEINFO`+`THUMB` from the `Saves\current\` folder** (frozen at load),
+- **Save = `gameMan->Write_Savegame(slot)`** (`CGameManager::Write_Savegame`, the G2 full
+  save). Serializes the live world AND script/parser state, so quest stages/Daedalus globals
+  are preserved, and it shows the game's own save progress bar. **Do NOT use
+  `oCGame::WriteSavegame(slot,0)`** — that's the Gothic 1 Addon path; on G2 it writes only the
+  world and leaves `SAVEDAT`/`SCRPTSAVE` copied from the stale `current\` snapshot, silently
+  losing quest progress (verified: those files matched `current\` byte-for-byte).
+  `SetAndWriteSavegame` writes metadata only — never use it for the world.
+- **The save copies `SAVEINFO`+`THUMB` from the `Saves\current\` folder** (frozen at load),
   so a fresh save inherits the loaded game's name/area/time/thumbnail. There is NO in-memory
   "current info" object to set (verified: localInfo / infoList[0] / infoList[slot] are not it).
   Fix metadata by patching the ASCII `SAVEINFO.SAV` on disk after the save.
@@ -52,9 +57,10 @@ The plugin builds against the **Union SDK / Gothic API** (NOT vendored here):
   → RGB565 → write a ZTEX (`THUMB.SAV` = 36-byte ZTEX header, format 8 = R5G6B5, 256×256).
 - **In-session menu refresh = `oCSavegameManager::Reinit()`** (rescans disk). `ReloadResources`
   refreshes only the thumbnail texture, not name/date/existence.
-- **On-screen notice**: `PrintTimed*` is NOT rendered in-game here; redraw `screen->Print` every
-  frame. To show it *before* the blocking save, defer the save ~250ms after it's due (a one-frame
-  deferral isn't enough — `AdvanceClock` fires multiple times per rendered frame).
+- **Progress bar**: `Write_Savegame` shows the game's own save progress bar, so no custom
+  on-screen notice is needed. (Historical note: `oCGame::WriteSavegame` did NOT show it, which
+  is why an earlier build drew a `screen->Print` "Autosaving…" notice with a ~250ms pre-save
+  deferral; both were removed once the correct save call restored the native bar.)
 
 ## Why a C++ plugin (not a Ninja/Daedalus patch)
 The script patches (`Autosave.vdf` + `Toolkit.vdf`) inject a second Ikarus/LeGo + vanilla save

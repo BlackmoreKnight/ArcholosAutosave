@@ -9,10 +9,10 @@ Ikarus/LeGo plus **vanilla** save hooks into Archolos' already-modified engine.
 Duplicate symbols + the wrong save routine cause an **access-violation crash**.
 
 This plugin runs as native C++ inside the engine. It triggers a save by calling
-the engine's own `oCGame::WriteSavegame()` — the *exact* code path the in-game
-save menu uses — so Archolos' own save scripts run and the save format stays
-correct. It touches **none** of the script layer, so the duplicate-library
-crash cannot happen.
+the engine's own full-save routine (`CGameManager::Write_Savegame`) — the same
+code path the in-game save menu uses — so Archolos' own save scripts run and the
+save format stays correct. It touches **none** of the script layer, so the
+duplicate-library crash cannot happen.
 
 ## Install
 
@@ -58,7 +58,8 @@ crash cannot happen.
 ## Status: complete
 
 Each autosave (every `IntervalMinutes`, in a safe moment) writes a full save via
-Archolos' own `WriteSavegame`, then:
+the engine's own `CGameManager::Write_Savegame` (the same call the in-game save
+menu uses — so the game's normal save progress bar appears), then:
 - rotates across slots `SlotMin..SlotMax` (12–15),
 - names it `Autosave N` with an ever-incrementing counter + the real date,
 - writes a **fresh thumbnail** of the current screen, and
@@ -71,25 +72,26 @@ changes its working dir to the root after startup, so it's there, NOT in
 throttled `due but skipped: <reason>` notes — handy for confirming it runs.
 
 ### How each piece is done (maintenance notes)
-- **Save:** `oCGame::WriteSavegame(slot,0)` (the only call that writes the full
-  world). `oCSavegameManager::SetAndWriteSavegame` writes metadata only — do
-  **not** use it for the world (it produces empty, unloadable saves).
-- **Name/area/time/playtime:** `WriteSavegame` copies `SAVEINFO`/`THUMB` from the
-  `current\` snapshot (frozen at load), so the plugin patches the ASCII
-  `SAVEINFO.SAV` after the save: `Title`, `WorldName`, `TimeDay/Hour/Min`,
-  `SaveDate`, `PlayTimeSeconds`. Live values come from `oCWorldTimer` (time),
-  `gameMan->playTime` (play time), and `GetGameWorld()->GetWorldName()` (area,
-  title-cased before `_` to match the menu's display form).
+- **Save:** `gameMan->Write_Savegame(slot)` (`CGameManager::Write_Savegame`, the
+  G2 full save). It serializes the live world **and** script/parser state, so
+  quest stages / Daedalus globals are preserved. ⚠️ Do **not** use
+  `oCGame::WriteSavegame(slot,0)` here — that's the Gothic 1 Addon path; on G2 it
+  writes only the world and leaves `SAVEDAT`/`SCRPTSAVE` copied from the stale
+  `current\` snapshot, silently losing quest progress. `SetAndWriteSavegame`
+  writes metadata only — never use it for the world.
+- **Name/area/time/playtime:** the save copies `SAVEINFO`/`THUMB` from the
+  `current\` snapshot, so the plugin patches the ASCII `SAVEINFO.SAV` after the
+  save: `Title`, `WorldName`, `TimeDay/Hour/Min`, `SaveDate`, `PlayTimeSeconds`.
+  Live values come from `oCWorldTimer` (time), `gameMan->playTime` (play time),
+  and `GetGameWorld()->GetWorldName()` (area, title-cased before `_` to match the
+  menu's display form).
 - **Thumbnail:** `zrenderer->Vid_GetFrontBufferCopy` → downscale to 256×256 →
   RGB565 → write the ZTEX `THUMB.SAV` (slot + `current\`).
 - **In-session visibility/loadability:** `oCSavegameManager::Reinit()` after the
   save re-reads all slots from disk (`ReloadResources` alone refreshes only the
   thumbnail texture, not name/date/existence).
-- **"Autosaving…" notice:** `PrintTimed*` isn't drawn in-game on this build, so
-  `OnFrame` redraws `screen->Print` each frame for ~3s. The save is deferred
-  ~250ms after it's due so the notice is presented over several real frames
-  *before* the blocking save (a one-frame deferral isn't enough — the per-frame
-  hook fires multiple times per rendered frame).
+- **Progress bar:** `Write_Savegame` triggers the game's own save progress bar,
+  so no custom on-screen notice is needed.
 
 ## How it works (notes for future maintenance)
 
