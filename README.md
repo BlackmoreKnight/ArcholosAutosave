@@ -50,8 +50,9 @@ duplicate-library crash cannot happen.
 | `IntervalMinutes` | 5 | Minutes between autosaves (min 1). A manual/quick save resets this clock. |
 | `SlotMin` | 12 | First slot in the rotation → `Saves\savegame12`. |
 | `SlotMax` | 15 | Last slot in the rotation. Autosaves cycle SlotMin→SlotMax→SlotMin… |
-| `OnlyWhenSafe` | 1 | Skip while dead/unconscious, weapon drawn, jumping/climbing/swimming, in inventory/looting, mid-dialog. Re-tries each frame until it's safe. |
+| `OnlyWhenSafe` | 1 | Skip while dead/unconscious, weapon drawn (combat), jumping/climbing/swimming, in inventory/looting, mid-dialog. Re-tries each frame until it's safe. |
 | `GraceSeconds` | 30 | Wait this long after a load before the first autosave. |
+| `SettleSeconds` | 3 | After an unsafe state (dialogue/combat) clears, wait this long of continuous safe play before saving. Stops a save that was deferred by a dialogue from firing during the dialogue's exit transition — which on reload would resume the dialogue. |
 | `Counter` | (auto) | Incrementing save-name number. Written by the plugin; survives restarts. |
 | `NextSlot` | (auto) | Which slot the next autosave uses. Written by the plugin. |
 
@@ -63,35 +64,51 @@ menu uses — so the game's normal save progress bar appears), then:
 - rotates across slots `SlotMin..SlotMax` (12–15),
 - names it `Autosave N` with an ever-incrementing counter + the real date,
 - writes a **fresh thumbnail** of the current screen, and
-- re-scans the slot list so it shows correctly and is **loadable in the same
-  session** (no restart needed).
+- shows correctly and is **loadable in the same session** (no restart needed).
+
+It never saves mid-dialogue or mid-combat — such saves are deferred, and once the
+state clears it waits `SettleSeconds` of continuous safe play before saving so the
+captured state has fully settled (otherwise a reload could resume the dialogue).
 
 A low-volume log is written to **`<game root>\ArcholosAutosave.log`** (the game
 changes its working dir to the root after startup, so it's there, NOT in
-`System\`). It records `world entered`, each `saving slot N`, `[thumb] …`, and
-throttled `due but skipped: <reason>` notes — handy for confirming it runs.
+`System\`). It records `world entered`, each `saving slot N`, and throttled
+`due but skipped: <reason>` notes — handy for confirming it runs.
 
 ### How each piece is done (maintenance notes)
 - **Save:** `gameMan->Write_Savegame(slot)` (`CGameManager::Write_Savegame`, the
   G2 full save). It serializes the live world **and** script/parser state, so
-  quest stages / Daedalus globals are preserved. ⚠️ Do **not** use
+  quest stages / Daedalus globals are preserved, and it shows the game's own save
+  progress bar (no custom notice needed). ⚠️ Do **not** use
   `oCGame::WriteSavegame(slot,0)` here — that's the Gothic 1 Addon path; on G2 it
   writes only the world and leaves `SAVEDAT`/`SCRPTSAVE` copied from the stale
-  `current\` snapshot, silently losing quest progress. `SetAndWriteSavegame`
-  writes metadata only — never use it for the world.
-- **Name/area/time/playtime:** the save copies `SAVEINFO`/`THUMB` from the
-  `current\` snapshot, so the plugin patches the ASCII `SAVEINFO.SAV` after the
-  save: `Title`, `WorldName`, `TimeDay/Hour/Min`, `SaveDate`, `PlayTimeSeconds`.
+  `current\` snapshot, silently losing quest progress.
+- **Name/area/time/playtime + thumbnail:** after the world save, the plugin uses
+  the engine's own post-save path (the same one zUtilities uses) — no on-disk file
+  patching. It calls `oCSavegameManager::GetSavegame(slot)` to get the info
+  object, sets `m_Name` / `m_WorldName` / `m_TimeDay` / `m_TimeHour` / `m_TimeMin`
+  / `m_PlayTimeSeconds`, captures a **fresh** thumbnail via
+  `zrenderer->CreateTextureConvert()` + `Vid_GetFrontBufferCopy()` →
+  `info->UpdateThumbPic(convert)` (then `delete` the convert — `UpdateThumbPic`
+  shrinks it to 256×256, so reusing a static one overflows the next full-screen
+  capture and crashes), then writes it all back with
+  `mgr->SetAndWriteSavegame(slot, info)`. This also refreshes the in-session slot
+  list, so the save is visible and loadable without a restart (no `Reinit` needed).
   Live values come from `oCWorldTimer` (time), `gameMan->playTime` (play time),
   and `GetGameWorld()->GetWorldName()` (area, title-cased before `_` to match the
   menu's display form).
-- **Thumbnail:** `zrenderer->Vid_GetFrontBufferCopy` → downscale to 256×256 →
-  RGB565 → write the ZTEX `THUMB.SAV` (slot + `current\`).
-- **In-session visibility/loadability:** `oCSavegameManager::Reinit()` after the
-  save re-reads all slots from disk (`ReloadResources` alone refreshes only the
-  thumbnail texture, not name/date/existence).
-- **Progress bar:** `Write_Savegame` triggers the game's own save progress bar,
-  so no custom on-screen notice is needed.
+- **Never save mid-dialogue/combat:** `IsSafeToSave()` gates on the dialogue
+  manager's conversation partner and the player's weapon mode (plus body state,
+  inventory, etc.). ⚠️ The dialogue check reads `oCInformationManager`'s instance
+  + init-guard at their fixed addresses — it must **not** call
+  `oCInformationManager::GetInformationManager()`, which is a lazy singleton whose
+  first call constructs the manager (and its views). Calling that per-frame made
+  our hook build the views before the renderer was ready, so every new dialogue
+  box flashed at the screen origin for a frame.
+- **Settle delay:** the unsafe state is tracked every frame; after it clears the
+  save waits `SettleSeconds` of continuous safe play, so a save deferred by a
+  dialogue doesn't fire in the exit transition (which would resume the dialogue on
+  load).
 
 ## How it works (notes for future maintenance)
 
@@ -102,8 +119,10 @@ throttled `due but skipped: <reason>` notes — handy for confirming it runs.
   never fires.
 - Must use **`Hook_Detours`** — `Hook_Auto` silently fails to patch on this build.
 - "In game" is gated on the global `player` pointer (`oCGame::m_bWorldEntered`
-  reads 0 mid-play here). Dialog is detected via `array_view_visible`
-  (not `array_view_enabled`, which is always true).
+  reads 0 mid-play here). Dialogue is detected from `oCInformationManager`'s
+  conversation partner, read at its fixed address **without** calling
+  `GetInformationManager()` (that lazy singleton's first call constructs the
+  manager's views — doing so from the hook glitched dialogue-box positioning).
 
 ## Build from source
 

@@ -44,19 +44,35 @@ The plugin builds against the **Union SDK / Gothic API** (NOT vendored here):
   `oCGame::WriteSavegame(slot,0)`** — that's the Gothic 1 Addon path; on G2 it writes only the
   world and leaves `SAVEDAT`/`SCRPTSAVE` copied from the stale `current\` snapshot, silently
   losing quest progress (verified: those files matched `current\` byte-for-byte).
-  `SetAndWriteSavegame` writes metadata only — never use it for the world.
-- **The save copies `SAVEINFO`+`THUMB` from the `Saves\current\` folder** (frozen at load),
-  so a fresh save inherits the loaded game's name/area/time/thumbnail. There is NO in-memory
-  "current info" object to set (verified: localInfo / infoList[0] / infoList[slot] are not it).
-  Fix metadata by patching the ASCII `SAVEINFO.SAV` on disk after the save.
+  `SetAndWriteSavegame` writes metadata only — never use it to write the WORLD.
+- **Metadata + thumbnail = engine post-save path** (no on-disk file patching; same path
+  zUtilities uses). After `Write_Savegame`: `mgr->GetSavegame(slot)` → set `m_Name`,
+  `m_WorldName`, `m_TimeDay/Hour/Min`, `m_PlayTimeSeconds` → capture thumbnail →
+  `mgr->SetAndWriteSavegame(slot, info)` (the world is already on disk, so this just rewrites
+  the info/thumb and refreshes the in-session list — **no `Reinit` needed** anymore).
+  (Historical: when the world was written with `oCGame::WriteSavegame` it inherited `current\`'s
+  SAVEINFO/THUMB, so an earlier build patched the ASCII `SAVEINFO.SAV` + hand-rolled a ZTEX
+  `THUMB.SAV` + called `Reinit`; all deleted once we moved to `Write_Savegame` + this pattern.)
 - **Live metadata sources** (`oCSavegameInfo::Init()` is empty on a bare instance):
   time = `ogame->GetWorldTimer()` `GetDay()/GetTime()`; play time = `gameMan->playTime`
   (`CGameManager*` @ 0x008C2958, field +0x90); area = `ogame->GetGameWorld()->GetWorldName()`
   (returns RAW `ARCHOLOS_MAINLAND`; title-case the part before `_` → `Archolos`).
-- **Thumbnail**: `zrenderer->Vid_GetFrontBufferCopy` (works under GD3D11) → downscale to 256×256
-  → RGB565 → write a ZTEX (`THUMB.SAV` = 36-byte ZTEX header, format 8 = R5G6B5, 256×256).
-- **In-session menu refresh = `oCSavegameManager::Reinit()`** (rescans disk). `ReloadResources`
-  refreshes only the thumbnail texture, not name/date/existence.
+- **Thumbnail**: use a **fresh** `zrenderer->CreateTextureConvert()` each save, fill it with
+  `Vid_GetFrontBufferCopy()` (works under GD3D11), pass to `info->UpdateThumbPic(convert)`,
+  then `delete convert`. ⚠️ Do NOT reuse a static convert: `UpdateThumbPic` shrinks it to
+  256×256, so the next full-screen `Vid_GetFrontBufferCopy` overflows it → access violation.
+- **Dialogue gate WITHOUT constructing the manager**: detect active dialogue by reading
+  `oCInformationManager`'s instance (`0x00AAC458`) + its function-static init guard
+  (`0x00AAC4C4`, bit 0) directly; only read `->Npc` once the guard is set. Do **not** call
+  `oCInformationManager::GetInformationManager()` — it's a lazy singleton whose first call runs
+  the constructor (building the dialogue views). Calling it per-frame (added for the settle
+  timer) made the hook construct those views before the renderer was ready, so every new
+  dialogue box flashed at the screen origin for a frame. (Addresses decoded from
+  `GetInformationManager` @ 0x0065F790 in this Gothic2.exe.)
+- **No saving mid-dialogue/combat + settle delay**: `IsSafeToSave()` runs every frame and also
+  gates on weapon mode (combat). Unsafe time is tracked each frame; after it clears, the save
+  waits `SettleSeconds` (default 3) of continuous safe play, so a save deferred by a dialogue
+  doesn't fire during the exit transition (which would resume the dialogue on reload).
 - **Progress bar**: `Write_Savegame` shows the game's own save progress bar, so no custom
   on-screen notice is needed. (Historical note: `oCGame::WriteSavegame` did NOT show it, which
   is why an earlier build drew a `screen->Print` "Autosaving…" notice with a ~250ms pre-save
