@@ -234,6 +234,21 @@ static void DoAutosave() {
   if ( !gameMan )
     return;
 
+  // Grab the thumbnail from the CURRENT (live gameplay) frame, BEFORE the
+  // blocking save. Under GD3D11 Vid_GetFrontBufferCopy re-renders the frame to
+  // capture it; doing that AFTER Write_Savegame - while the save/progress-bar
+  // view is up - produced a visible one-frame zoom/FOV flash. Capturing first
+  // (the order zUtilities uses, which doesn't flash) shoots the normal scene and
+  // avoids it. Use a FRESH convert each save and delete it below: UpdateThumbPic
+  // shrinks the convert to thumbnail size, so reusing one would make the next
+  // full-screen Vid_GetFrontBufferCopy overflow it -> access violation.
+  zCTextureConvert* thumb = 0;
+  if ( zrenderer ) {
+    thumb = zrenderer->CreateTextureConvert();
+    if ( thumb )
+      zrenderer->Vid_GetFrontBufferCopy( *thumb );
+  }
+
   // Full G2 save: serializes the live world AND script/parser state (quest
   // stages, Daedalus globals), and shows the game's own save progress bar.
   g_saving = true;
@@ -263,20 +278,13 @@ static void DoAutosave() {
       info->m_TimeMin  = m;
     }
     info->m_PlayTimeSeconds = gameMan->playTime;
-    // Thumbnail: use a FRESH convert each save and delete it. UpdateThumbPic
-    // shrinks the convert to thumbnail size, so reusing one would make the next
-    // Vid_GetFrontBufferCopy write a full-screen frame into a tiny buffer ->
-    // access violation. (Same fresh-convert approach zUtilities uses.)
-    if ( zrenderer ) {
-      zCTextureConvert* thumb = zrenderer->CreateTextureConvert();
-      if ( thumb ) {
-        zrenderer->Vid_GetFrontBufferCopy( *thumb );
-        info->UpdateThumbPic( thumb );
-        delete thumb;
-      }
-    }
+    // Apply the pre-save thumbnail captured above.
+    if ( thumb )
+      info->UpdateThumbPic( thumb );
     mgr->SetAndWriteSavegame( slot, info );
   }
+  if ( thumb )
+    delete thumb;
 
   // Advance the rotation and persist counter + next slot to Gothic.ini.
   g_nextSlot = ( slot >= g_slotMax ) ? g_slotMin : slot + 1;

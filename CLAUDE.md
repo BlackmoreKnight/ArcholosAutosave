@@ -61,6 +61,13 @@ The plugin builds against the **Union SDK / Gothic API** (NOT vendored here):
   `Vid_GetFrontBufferCopy()` (works under GD3D11), pass to `info->UpdateThumbPic(convert)`,
   then `delete convert`. ⚠️ Do NOT reuse a static convert: `UpdateThumbPic` shrinks it to
   256×256, so the next full-screen `Vid_GetFrontBufferCopy` overflows it → access violation.
+  ⚠️ Grab the front buffer **BEFORE** `Write_Savegame`, not after: under GD3D11
+  `Vid_GetFrontBufferCopy` re-renders the frame to capture it, and doing that while the
+  save/progress-bar view is up flashed a visible one-frame zoom. Capture first (order zUtilities
+  uses), keep the convert across the save, apply + delete it after. Note the thumbnail still
+  looks more "zoomed in" than a manual menu save (which re-renders at the square thumb aspect,
+  capturing wider FOV); the front-buffer crop is the trade-off for no on-screen flash, and is
+  identical to zUtilities' quicksave thumbnails.
 - **Dialogue gate WITHOUT constructing the manager**: detect active dialogue by reading
   `oCInformationManager`'s instance (`0x00AAC458`) + its function-static init guard
   (`0x00AAC4C4`, bit 0) directly; only read `->Npc` once the guard is set. Do **not** call
